@@ -92,8 +92,18 @@ if len(config.read(options["-f"]))!=1:
     print("Cannot read config %s"%options["-f"],file=sys.stderr)
     sys.exit(1)
 conf=config['dyngo']
+if conf['loglevel'].isdigit():
+    level=int(conf['loglevel'])
+else:
+    try:
+        logging.NOTICE=25
+        level=getattr(logging,conf['loglevel'].upper())
+    except AttributeError:
+        print("Invalid logleevel '%s'"%conf('loglevel'))
+        sys.exit(1)
+
 logging.basicConfig(format="%(asctime)s %(message)s",
-      level=getattr(logging,conf['loglevel'].upper()))
+      level=level, stream=sys.stderr)
 interval=int(conf['interval'])
 database=dbm.open(conf['database'],"c")
 https_params={}
