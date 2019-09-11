@@ -1,0 +1,14 @@
+[Unit]
+Description=Dyngo multiple dyndns client
+After=network.target
+Documentation=https://github.com/vbwagner/dyngo
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/dyngo
+KillSignal=SIGTERM
+WorkingDirectory=~
+User=dyngo
+StandardError=journal
+[Install]
+WantedBy=multi-user.target
