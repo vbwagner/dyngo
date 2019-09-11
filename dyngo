@@ -1,0 +1,86 @@
+#!/usr/bin/env python3
+import ipaddress, subprocess, sys, getopt,dbm
+from configparser import ConfigParser
+class DyndnsNetwork(object):
+    """
+    This class represents dynamic DNS server and network.
+    It has attributes hostname network server user and password
+    """
+    def __init__(self,config_section):
+        self.hostname = config_section['hostname']
+        self.network = ipaddress.ip_network(config_section['network'])
+        self.server = config_section['server']
+        if user in config_section:
+            self.user=config_section["user"]
+            self.password=config_section["password"]
+
+
+    def contains(self,address):
+        if self.network.prefixlen==0 and address.is_private:
+            return False
+        if self.network.version != address.version:
+            return False
+        return address in self.network
+   def nsupdate(self, address):
+        raise NotImplementedError
+
+def get_current_addresses():
+    result=[]    
+    for line in subprocess.run(['ip','-o','addr','show'],check=True,stdout=subprocess.PIPE).stdout.decode('utf-8').split("\n"):
+        if not len(line): 
+            continue
+        (no,iface,family,addr,rest)=line.split(maxsplit=4)
+        address=ipaddress.ip_address(addr.split('/')[0])
+        if address.is_loopback or address.is_link_local:
+            continue
+        result.append(address)
+    return result
+def check_for_update():
+    addrlist=get_current_addresses()
+    for name,net in networks.items():
+        found=False
+        for a in addrlist:
+            if net.contains(a):
+                found =True
+                if name in database:
+                    old_addr=ipaddress.ip_address(database[name].decode("utf-8"))
+                    if old_addr==a:
+                        # Nothing changed go, to next net
+                        break
+                # address changed
+                net.nsupdate(a)
+                database[name]=str(a)
+        if not found:
+            del data[name]
+
+            
+
+
+config=ConfigPaser()
+config['dyngo']={'interval':'60','database','/var/lib/dyngo/dyngo.db'}
+options=dict(getopt.getopt(sys.argv,"f:")[0])
+if not '-f' in options:
+    options["-f"]="/etc/dyngo.conf"
+if len(config.read(options["-f"]))!=1:
+    print("Cannot read config %s"%options["-f"],file=sys.stderr)
+    sys.exit(1)
+    
+conf=config['dyngo']
+interval=int(conf['interval'])
+database=dbm.open(conf['database'],"c")
+# Convert all other config sections to DyndnsNetwork objects
+networks={}
+for sect in config.sections():
+    if sect == 'dyngo' or sect= 'DEFAULT':
+        continue
+    networks[sect]=DyndnsNetwork(config[sect])
+# Remove stale items from persistent database, which are no more
+# mentioned in the config file
+for i in set([x.decode("utf-8") for x database.keys()])-set(network.keys()):
+    del database[i]
+
+
+while True:
+    check_for_update()
+    time.sleep(interval)
+
