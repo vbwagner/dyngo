@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import ipaddress, subprocess, sys, getopt,dbm
 from configparser import ConfigParser
+import urllib.request,urllib.parse
 class DyndnsNetwork(object):
     """
     This class represents dynamic DNS server and network.
@@ -21,8 +22,25 @@ class DyndnsNetwork(object):
         if self.network.version != address.version:
             return False
         return address in self.network
-   def nsupdate(self, address):
-        raise NotImplementedError
+    def nsupdate(self, address):
+        """
+        Sends a get query to specified server.
+        Raises HTTPError if something goes wrong
+        """
+        #construct opener
+        if hasattr(self,user):
+            password_mgr =urllib.request.HTTPPasswordMgrWithDefaultRealm()
+            password_mgr.add_password(None,self.server,self.user,self.password)
+            handler=urllib.request.HTTPBasicAuthHandler(password_mgr)
+            opener = urllib.request.build_opener(handler)
+        else:
+            opener = urllib.request.build_opener()
+        with opener.open('%s?%s'%(self.server,
+                     urllib.parse.urlencode({'hostname':self.hostname,
+                     'myip':str(address)}))) as req:
+               req.read().decode("utf-8")
+               
+           
 
 def get_current_addresses():
     result=[]    
@@ -48,16 +66,20 @@ def check_for_update():
                         # Nothing changed go, to next net
                         break
                 # address changed
-                net.nsupdate(a)
-                database[name]=str(a)
+                try:
+                     net.nsupdate(a)
+                     database[name]=str(a)
+                except urllib.error.HTTPError as e:
+                    pass
+                break     
         if not found:
             del data[name]
 
             
 
 
-config=ConfigPaser()
-config['dyngo']={'interval':'60','database','/var/lib/dyngo/dyngo.db'}
+config=ConfigParser()
+config['dyngo']={'interval':'60','database':'/var/lib/dyngo/dyngo.db','ca':'/etc/ssl/certs'}
 options=dict(getopt.getopt(sys.argv,"f:")[0])
 if not '-f' in options:
     options["-f"]="/etc/dyngo.conf"
@@ -68,15 +90,22 @@ if len(config.read(options["-f"]))!=1:
 conf=config['dyngo']
 interval=int(conf['interval'])
 database=dbm.open(conf['database'],"c")
+https_params={}
+if 'ca' in conf and len(conf['ca']):
+    path=conf['ca']
+    if os.path.isdir(path):
+        https_params['capath']=path
+    else:
+        http_params['cafile']=path
 # Convert all other config sections to DyndnsNetwork objects
 networks={}
 for sect in config.sections():
-    if sect == 'dyngo' or sect= 'DEFAULT':
+    if sect == 'dyngo' or sect == 'DEFAULT':
         continue
     networks[sect]=DyndnsNetwork(config[sect])
 # Remove stale items from persistent database, which are no more
 # mentioned in the config file
-for i in set([x.decode("utf-8") for x database.keys()])-set(network.keys()):
+for i in set([x.decode("utf-8") for x in database.keys()])-set(network.keys()):
     del database[i]
 
 
