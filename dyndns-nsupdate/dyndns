@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+"""
+Example dyndns script which uses nsupdate utility to send changes into
+your name server.
+It intended to run as cgi, but it is no problem to rewrite it to use
+wsgi or some python-based webserver.
+
+It handles get request only and extracts just two fields - hostname and
+myip.
+
+configuration parameters
+
+NSUPDATE = full path to nsupdate program
+KEYDIR = path to directory where keys are stored
+DOMAINS = dictionary of domains which can be handled here
+TTL = time to live of A records in seconds
+"""
+NSUPDATE="/usr/bin/nsupdate"
+KEYDIR="/etc/bind/keys"
+TTL=3600
+DOMAINS={"home.wagner.pp.ru":{'server':'localhost','key':'Khome.wagner.pp.ru.+157+65113.key','users':["len45"]}}
+import cgi,sys,traceback,os, subprocess,ipaddress
+
+def hterror(code,msg,exc=False):
+    status={200:'200 OK',401:'401 UNAUTHORIZED',404:'404 NOT FOUND',403:'403 FORBIDDEN',500:'500 SERVER ERROR'}
+    if code in status:
+        print(status[code])
+    else:
+        print(code)
+    print("Content-Type: text/plain\n")
+    print(msg)
+    if exc:
+        traceback.print_exc(file=sys.stdout)
+    sys.exit(0)
+
+form=cgi.FieldStorage()
+hostnames=form.getlist("hostname")
+address=form.getlist("myip")
+if not address or address[0]=="auto":
+    address=os.environ['REMOTE_ADDR']
+else:
+    address=address[0]
+if not 'REMOTE_USER' in os.environ:
+    hterror(401,"No user name")
+user = os.environ['REMOTE_USER']
+if not hostnames:
+    hterror(404,"No hostname parameter in the URL")
+try:
+    hostname=hostnames[0]
+    if hostname in DOMAINS:
+        domain=hostname
+    else:
+        domain = ".".join(hostname.split(".")[1:])
+        if not domain in DOMAINS:
+            hterror(404,"Domain %s not supported "%domain)
+    dominfo=DOMAINS[domain]    
+    if not user in dominfo['users']:
+        hterror(403,'User %s is not allowed to update domain %s'%(user,domain))
+    try:
+        a=ipaddress.ip_address(address)
+    except Exception as e:
+        hterror(400,"Invalid IP address format")
+    if a.version == 6:
+        recordtype='AAAA' 
+    else:
+        recordtype='A'
+    key=os.path.join(KEYDIR,dominfo['key'])
+    if not os.access(key,os.R_OK):
+        hterror(500,"key file for domain %s missing"%domain)
+    nsupdate_script="""server %(server)s
+zone %(domain)s
+update delete %(hostname)s. %(recordtype)s
+update add %(hostname)s. %(ttl)d %(recordtype)s %(address)s
+show
+send
+"""%{'server':dominfo['server'],'domain':domain,'hostname':hostname,'recordtype':recordtype,'ttl':TTL,'address':address}
+    subprocess.run([NSUPDATE,'-k',key],stdout=sys.stderr,check=True,stdin=nspdate_script)
+    hterror(200,"OK")    
+except Exception as e:
+    hterror(500,str(e),exc=True)
