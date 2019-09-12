@@ -80,7 +80,8 @@ def check_for_update():
                 break     
         if not found:
             logging.info("Address for net %s no more found",name)
-            del data[name]
+            if name in database:
+                del database[name]
 
 config=ConfigParser()
 config['dyngo']={'interval':'60','database':'/var/lib/dyngo/dyngo.db',
