@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+"""
+Example dyndns script which uses dnsmask caching newsserver.
+It intended to run as cgi, but it is no problem to rewrite it to use
+wsgi or some python-based webserver.
+
+It handles get request only and extracts just to fields - hostname and
+myip.
+
+FILENAME should me name of the file which is included into dnsmasq
+configuration with addn-host directive. This file should be writable by
+user, which your webserver runs under (www-data).
+
+It needs some way to send HUP signal to dnsmasq server. I use external
+program hup_server which can be installed setuid root.
+
+If you know better way to force dnsmasq reload some configuration file
+without elevated privileges, let me know.
+
+URI of this script should be protected by basic authentication on
+web-server level. Although, there is now no way to specify which user
+have right to change which DNS records.
+
+"""
+FILENAME="/var/lib/misc/dyndns.hosts"
+
+import cgi,sys,traceback,os
+form=cgi.FieldStorage()
+hostnames=form.getlist("hostname")
+address=form.getlist("myip")
+if not address or address[0]=="auto":
+    address=os.environ['REMOTE_ADDR']
+else:
+    address=address[0]
+if not hostnames:
+    print ("Status: 404 NOT FOUND")
+    print ("Content-Type: text/plain\n")
+    print ("No hostname parameter in the URL")
+    sys.exit(0)
+try:
+    f=open(FILENAME,"r+")
+    out=""
+    hostname=hostnames[0]
+    hostnames=hostname.split(".")
+    if len(hostnames)>1:
+        hostnames=[hostname,hostnames[0]]
+    else:
+        hostnames=[hostname]
+    for line in f.read().split("\n"):
+        # skip empty lines
+        if line == "":
+            continue
+        # Never skip comments
+        if not line.startswith("#"):
+            fields=line.split()         
+            # skip line with our IP - it is our now
+            if fields[0] == address:
+                continue
+            # skip line with our name    
+            if hostname in fields[1:]:
+                continue
+        # add all other lines to new file content        
+        out += line+"\n"        
+    # add our address and names    
+    out += address+"\t"+" ".join(hostnames) +"\n"
+    f.seek(0,0)
+    f.write(out)
+    f.close()
+    os.system("/usr/local/sbin/hup_daemon /var/run/dnsmasq/dnsmasq.pid")
+    print("Status: 200 OK")
+    print("Content-Type: text/plain\n")
+    print("OK\n")
+except Exception as e:
+    print("Status: 500 SERVER ERROR")
+    print("Content-Type: text/plain\n")
+    traceback.print_exc(file=sys.stdout)
+
