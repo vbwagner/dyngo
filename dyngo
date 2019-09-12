@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import ipaddress, subprocess, sys, getopt,dbm
 from configparser import ConfigParser
+import urllib.request,urllib.parse
+import logging,os.path,time
 class DyndnsNetwork(object):
     """
     This class represents dynamic DNS server and network.
@@ -10,7 +12,7 @@ class DyndnsNetwork(object):
         self.hostname = config_section['hostname']
         self.network = ipaddress.ip_network(config_section['network'])
         self.server = config_section['server']
-        if user in config_section:
+        if 'user' in config_section:
             self.user=config_section["user"]
             self.password=config_section["password"]
 
@@ -21,11 +23,30 @@ class DyndnsNetwork(object):
         if self.network.version != address.version:
             return False
         return address in self.network
-   def nsupdate(self, address):
-        raise NotImplementedError
+    def nsupdate(self, address):
+        """
+        Sends a get query to specified server.
+        Raises HTTPError if something goes wrong
+        """
+        #construct opener
+        logging.debug("Going to send message to %s",self.server)
+        if hasattr(self,'user'):
+            password_mgr =urllib.request.HTTPPasswordMgrWithDefaultRealm()
+            password_mgr.add_password(None,self.server,self.user,self.password)
+            handler=urllib.request.HTTPBasicAuthHandler(password_mgr)
+            opener = urllib.request.build_opener(handler)
+        else:
+            opener = urllib.request.build_opener()
+        with opener.open('%s?%s'%(self.server,
+                     urllib.parse.urlencode({'hostname':self.hostname,
+                     'myip':str(address)}))) as req:
+               req.read().decode("utf-8")
+               
+           
 
 def get_current_addresses():
     result=[]    
+    logging.debug("Acquire current IPs")
     for line in subprocess.run(['ip','-o','addr','show'],check=True,stdout=subprocess.PIPE).stdout.decode('utf-8').split("\n"):
         if not len(line): 
             continue
@@ -34,6 +55,7 @@ def get_current_addresses():
         if address.is_loopback or address.is_link_local:
             continue
         result.append(address)
+    logging.debug("Got following addresses: %s",repr(result))
     return result
 def check_for_update():
     addrlist=get_current_addresses()
@@ -46,39 +68,63 @@ def check_for_update():
                     old_addr=ipaddress.ip_address(database[name].decode("utf-8"))
                     if old_addr==a:
                         # Nothing changed go, to next net
+                        logging.debug("Address for net %s not changed",name)
                         break
                 # address changed
-                net.nsupdate(a)
-                database[name]=str(a)
+                try:
+                     logging.info("Doing update for net %s with address %s",name, str(a))
+                     net.nsupdate(a)
+                     database[name]=str(a)
+                except urllib.error.HTTPError as e:
+                    logging.exception("Http error doing nsupdate code %s",e.code)
+                break     
         if not found:
+            logging.info("Address for net %s no more found",name)
             del data[name]
 
-            
-
-
-config=ConfigPaser()
-config['dyngo']={'interval':'60','database','/var/lib/dyngo/dyngo.db'}
+config=ConfigParser()
+config['dyngo']={'interval':'60','database':'/var/lib/dyngo/dyngo.db',
+                 'ca':'/etc/ssl/certs','loglevel':'WARNING'}
 options=dict(getopt.getopt(sys.argv,"f:")[0])
 if not '-f' in options:
     options["-f"]="/etc/dyngo.conf"
 if len(config.read(options["-f"]))!=1:
     print("Cannot read config %s"%options["-f"],file=sys.stderr)
     sys.exit(1)
-    
 conf=config['dyngo']
+if conf['loglevel'].isdigit():
+    level=int(conf['loglevel'])
+else:
+    try:
+        logging.NOTICE=25
+        level=getattr(logging,conf['loglevel'].upper())
+    except AttributeError:
+        print("Invalid logleevel '%s'"%conf('loglevel'))
+        sys.exit(1)
+
+logging.basicConfig(format="%(asctime)s %(message)s",
+      level=level, stream=sys.stderr)
 interval=int(conf['interval'])
 database=dbm.open(conf['database'],"c")
+https_params={}
+if 'ca' in conf and len(conf['ca']):
+    path=conf['ca']
+    if os.path.isdir(path):
+        https_params['capath']=path
+    else:
+        http_params['cafile']=path
 # Convert all other config sections to DyndnsNetwork objects
 networks={}
 for sect in config.sections():
-    if sect == 'dyngo' or sect= 'DEFAULT':
+    if sect == 'dyngo' or sect == 'DEFAULT':
         continue
+    logging.debug("Processing network %s",sect)    
     networks[sect]=DyndnsNetwork(config[sect])
 # Remove stale items from persistent database, which are no more
 # mentioned in the config file
-for i in set([x.decode("utf-8") for x database.keys()])-set(network.keys()):
+for i in set([x.decode("utf-8") for x in database.keys()])-set(networks.keys()):
+    logging.info("Removing from persistent state network %s which is no more  in config",i)
     del database[i]
-
 
 while True:
     check_for_update()
