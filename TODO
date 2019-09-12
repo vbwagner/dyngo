@@ -1,0 +1,9 @@
+1. Use json file instead of dbm to save state on disk. It is small
+   enough to overwrite it completely each time it changes and no
+   need to support cocurrent access
+2. Check mtime of configuration file and reread it if it changed.
+   Requires some refactoring
+   (log error and continue to use old loaded configuration if new file
+    contain errors. Store new timestamp to watch for further
+	modifications)
+   
