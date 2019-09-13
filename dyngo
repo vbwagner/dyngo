@@ -98,7 +98,7 @@ config = ConfigParser()
 config['dyngo'] = {'interval': '60', 'database': '/var/lib/dyngo/dyngo.db',
                    'ca': '/etc/ssl/certs', 'loglevel': 'WARNING'}
 options = dict(getopt.getopt(sys.argv, "f:")[0])
-if not '-f' in options:
+if '-f' not in options:
     options["-f"] = "/etc/dyngo.conf"
 if len(config.read(options["-f"])) != 1:
     print("Cannot read config %s" % options["-f"], file=sys.stderr)
@@ -124,7 +124,7 @@ if 'ca' in conf and len(conf['ca']):
     if os.path.isdir(path):
         https_params['capath'] = path
     else:
-        http_params['cafile'] = path
+        https_params['cafile'] = path
 # Convert all other config sections to DyndnsNetwork objects
 networks = {}
 for sect in config.sections():
