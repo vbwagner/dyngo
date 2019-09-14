@@ -9,7 +9,6 @@ import ipaddress
 import subprocess
 import sys
 import getopt
-import dbm
 from configparser import ConfigParser
 import urllib.request
 import urllib.parse
@@ -19,15 +18,21 @@ import os.path
 import time
 
 
-class DyndnsNetwork(object):
+class DyndnsNetwork:
     """
     This class represents dynamic DNS server and network.
     It has attributes hostname network server user and password
     """
-    def __init__(self, config_section):
+    ssl_context = None
+    list = []
+    def __init__(self, config_section, name):
+        """
+        Initializes object from config file section
+        """
         self.hostname = config_section['hostname']
         self.network = ipaddress.ip_network(config_section['network'])
         self.server = config_section['server']
+        self.name = name
         if 'user' in config_section:
             self.user = config_section["user"]
             self.password = config_section["password"]
@@ -41,6 +46,25 @@ class DyndnsNetwork(object):
         if self.network.version != address.version:
             return False
         return address in self.network
+    def urlopen(self, url):
+        """
+        Opens given URL, applying ssl_context from class variable
+        and username and password from instance variables.
+        Also Sets User-Agent
+        """
+        handlers = []
+        if hasattr(self, 'user'):
+            password_mgr = urllib.request.HTTPPasswordMgrWithDefaultRealm()
+            password_mgr.add_password(None, self.server, self.user,
+                                      self.password)
+            handler = urllib.request.HTTPBasicAuthHandler(password_mgr)
+            handlers.append(handler)
+        if self.ssl_context is not None:
+            handlers.append(urllib.request.HTTPSHandler(context=self.ssl_context))
+        opener = urllib.request.build_opener(*handlers)
+        req = urllib.request.Request(url)
+        req.add_header('User-Agent', 'Dyngo/1.0')
+        return opener.open(req)
 
     def nsupdate(self, address):
         """
@@ -49,24 +73,48 @@ class DyndnsNetwork(object):
         """
         # Construct opener
         logging.debug("Going to send message to %s", self.server)
-        handlers = []
-        if hasattr(self, 'user'):
-            password_mgr = urllib.request.HTTPPasswordMgrWithDefaultRealm()
-            password_mgr.add_password(None, self.server, self.user,
-                                      self.password)
-            handler = urllib.request.HTTPBasicAuthHandler(password_mgr)
-            handlers.append(handler)
-        if ssl_context is not None:
-            handlers.append(urllib.request.HTTPSHandler(context=ssl_context))
-        opener = urllib.request.build_opener(*handlers)
         url = '%s?%s' % (self.server,
                          urllib.parse.urlencode({'hostname': self.hostname,
                                                  'myip': str(address)}
                                                ))
-        req = urllib.request.Request(url)
-        req.add_header('User-Agent', 'Dyngo/1.0')
-        with opener.open(req) as resp:
+        with self.urlopen(url) as resp:
             logging.debug("Server replied: %s", resp.read().decode("utf-8"))
+    def check_change(self, addrlist, database):
+        """
+        Checks if address for given network is changed and
+        calls nsupdate if necessary.
+
+        Returns True if database have to be saved (it is not equal
+        to condition where nsupdate is called, because if address
+        have been disappeared we don't call nsupdate (because 'offline'
+        is not supported by most dyndns implementions) and if nsupdate
+        failed, we consider database unchanged.
+        """
+        addrs = [a for a in addrlist if self.contains(a)]
+        if not addrs:
+            logging.info("Address for net %s no more found", self.name)
+            if self.name in database:
+                del database[self.name]
+                return True
+            return False
+        addr = sorted(addrs)[0]
+        if self.name in database:
+            if ipaddress.ip_address(database[self.name]) == addr:
+                logging.debug("Address for net %s not changed", self.name)
+                return False
+        # If we got here than either address is not same as in database
+        # of there are no address for our network in database.
+        # In both cases we have to perform nsupdate
+        try:
+            logging.info("Doing update for net %s with address %s",
+                         self.name, str(addr))
+            self.nsupdate(addr)
+            database[self.name] = str(addr)
+            return True
+        except urllib.error.HTTPError as ex:
+            logging.exception("Http error doing nsupdate code %s",
+                              ex.code)
+        return False
 def get_current_addresses():
     """
     Retrieves list of addresses (except link local)
@@ -79,7 +127,7 @@ def get_current_addresses():
                                check=True,
                                stdout=subprocess.PIPE
                               ).stdout.decode('utf-8').split("\n"):
-        if not len(line):
+        if line == "":
             continue
         address = ipaddress.ip_address(line.split()[3].split('/')[0])
         if address.is_loopback or address.is_link_local:
@@ -88,86 +136,172 @@ def get_current_addresses():
     logging.debug("Got following addresses: %s", repr(result))
     return result
 
+def read_config():
+    """
+    Checks if config file modification time is greater than
+    stored value of last config load, and if so, reloads
+    config. Returns True, if config was loaded
+
+    Sets loaded timestapt to mtime of file it attempted to load,
+    regardless of success, because if load fails, it is no point to
+    attempt reload unless user fixed problem.
+
+    Expects ConfigParser in global config variable
+    on entry with config["dyngo"]["name"] - file to
+    read and config["dyngo"]["loaded"] - mtime of last read config
+    """
+    global config #pylint: disable=global-statement, invalid-name
+    name = config["dyngo"]["name"]
+    loaded = int(config["dyngo"]["loaded"])
+    try:
+        timestamp = int(os.stat(name).st_mtime)
+    except OSError as exc:
+        logging.exception("reading config %s: %s", name, str(exc))
+        return False
+    if timestamp <= loaded:
+        # Return if config is not changed since last read
+        return False
+    if config.read(name) != 1:
+        logging.error("Error reading configuration from %s", name)
+        config["dyngo"]["name"] = name
+        config["dyngo"]["loaded"] = str(timestamp)
+        return False
+    config['dyngo']["name"] = name
+    config['dyngo']["loaded"] = str(timestamp)
+    return True
+
+def load_config():
+    """
+    Tries to reload config and apply newly readed values
+
+    Returns True, if configuration was updated.
+    False if someting wrong happened
+
+    """
+
+    global config #pylint: disable=global-statement, invalid-name
+    global db_file #pylint: disable=global-statement, invalid-name
+    if not read_config():
+        return False
+    # Now new config is read. Lets use global values
+    # loglevel
+    conf = config["dyngo"]
+    if conf['loglevel'].isdigit():
+        level = int(conf['loglevel'])
+    else:
+        try:
+            level = getattr(logging, conf['loglevel'].upper())
+        except AttributeError:
+            level = None
+            logging.error("Invalid loglevel '%s'", conf('loglevel'))
+    if level is not None:
+        logging.basicConfig(format="%(asctime)s %(message)s",
+                            level=level, stream=sys.stderr)
+    global interval #pylint: disable=global-statement, invalid-name
+    interval = int(conf['interval'])
+    db_file.read(conf['database'])
+    if 'ca' in conf and conf['ca'] != "":
+        path = conf['ca']
+        if os.path.isdir(path):
+            DyndnsNetwork.ssl_context = ssl.create_default_context(capath=path)
+        else:
+            DyndnsNetwork.ssl_context = ssl.create_default_context(cafile=path)
+    return configure_networks()
+def configure_networks():
+    """
+    Creates DyndnsNetwork object for each configuration file section
+    except "dyngo" and "DEFAULT"
+
+    Stores these objects in local variable and if entire config
+    is read successfully, replaces class variable list in DyndnsNetwork
+    class.
+    """
+    global config #pylint: disable=global-statement, invalid-name
+    global db_file #pylint: disable=global-statement, invalid-name
+    database = db_file['current']
+
+    networks = []
+    try:
+        for sect in config.sections():
+            if sect in ('dyngo', 'DEFAULT'):
+                continue
+            logging.debug("Processing network %s", sect)
+            networks.append(DyndnsNetwork(config[sect], sect))
+    except Exception as exc: # pylint: disable=broad-except
+        logging.exception(str(exc))
+        # Keep old network list
+        return False
+    # Remove stale items from persistent database, which are no more
+    # mentioned in the config file
+    DyndnsNetwork.list = networks
+    database_modified = 0
+    database = db_file["current"]
+    for i in set(database.keys()) - {x.name for x in networks}:
+        # pylint: disable=logging-not-lazy
+        logging.info("Removing from persistent state network %s" +
+                     "which is no more in config", i)
+        del database[i]
+        database_modified += 1
+    if database_modified:
+        save_database()
+    return True
 def check_for_update():
     """
     This function is called periodically from main loop and
     performs actual work - comparing list of IP addresses
     with configured dyndns networks.
-    """
+   """
     addrlist = get_current_addresses()
-    for name, net in networks.items():
-        found = False
-        for addr in addrlist:
-            if net.contains(addr):
-                found = True
-                if name in database:
-                    old_addr = ipaddress.ip_address(database[name].decode("utf-8"))
-                    if old_addr == addr:
-                        # Nothing changed go, to next net
-                        logging.debug("Address for net %s not changed", name)
-                        break
-                # address changed
-                try:
-                    logging.info("Doing update for net %s with address %s",
-                                 name, str(addr))
-                    net.nsupdate(addr)
-                    database[name] = str(addr)
-                except urllib.error.HTTPError as ex:
-                    logging.exception("Http error doing nsupdate code %s",
-                                      ex.code)
-                break
-        if not found:
-            logging.info("Address for net %s no more found", name)
-            if name in database:
-                del database[name]
+    global db_file #pylint: disable=global-statement, invalid-name
+    database = db_file["current"]
+    database_modified = False
+    for net in DyndnsNetwork.list:
+        if net.check_change(addrlist, database):
+            database_modified = True
+    if database_modified:
+        save_database()
 
+def save_database():
+    """ Writes database into persistent state file
+    All relationship between two global variables config and db_file
+    is hidden here
+    """
+    with open(config["dyngo"]["database"], "w") as f: # pylint: disable=invalid-name
+        db_file.write(f)
 
-config = ConfigParser()
-config['dyngo'] = {'interval': '60', 'database': '/var/lib/dyngo/dyngo.db',
-                   'ca': '/etc/ssl/certs', 'loglevel': 'WARNING'}
-options = dict(getopt.getopt(sys.argv, "f:")[0])
-if '-f' not in options:
-    options["-f"] = "/etc/dyngo.conf"
-if len(config.read(options["-f"])) != 1:
-    print("Cannot read config %s" % options["-f"], file=sys.stderr)
+def parse_options():
+    """
+    Option parsing is encapsulated into function just to prevent
+    pylint complaints about using variable names at toplevel
+    """
+    options = dict(getopt.getopt(sys.argv, "f:")[0])
+    if '-f' in options:
+        config["dyngo"]["name"] = options['-f']
+
+#Main program begins here
+#Global initalization Create config parser
+config = ConfigParser() # pylint: disable=invalid-name
+# use same format for persistent database as for configuration file
+# for Entia non sunt multiplicanda
+db_file = ConfigParser() # pylint: disable=invalid-name
+db_file.add_section("current")
+# setting global defaults for configuration
+interval = 60 # pylint: disable=invalid-name
+config['dyngo'] = {'interval':str(interval), 'database':'/var/lib/dyngo/dyngo.db',
+                   'ca':'/etc/ssl/certs', 'loglevel':'WARNING',
+                   'loaded':'0', 'name':'/etc/dyngo.conf'}
+
+# Add an extra log level between INFO and WARNING
+logging.NOTICE = 25
+
+# get config from command line if neccessary.
+parse_options()
+# First time config read is mandatory
+if not load_config():
+    print("Cannot read config %s" % config['dyngo']['name'], file=sys.stderr)
+
     sys.exit(1)
-conf = config['dyngo']
-if conf['loglevel'].isdigit():
-    level = int(conf['loglevel'])
-else:
-    try:
-        logging.NOTICE = 25
-        level = getattr(logging, conf['loglevel'].upper())
-    except AttributeError:
-        print("Invalid logleevel '%s'" % conf('loglevel'))
-        sys.exit(1)
-
-logging.basicConfig(format="%(asctime)s %(message)s",
-                    level=level, stream=sys.stderr)
-interval = int(conf['interval'])
-database = dbm.open(conf['database'], "c")
-ssl_context = None
-if 'ca' in conf and len(conf['ca']):
-    path = conf['ca']
-    if os.path.isdir(path):
-        ssl_context = ssl.create_default_context(capath=path)
-    else:
-        ssl_context = ssl.create_default_context(cafile=path)
-# Convert all other config sections to DyndnsNetwork objects
-networks = {}
-for sect in config.sections():
-    if sect == 'dyngo' or sect == 'DEFAULT':
-        continue
-    logging.debug("Processing network %s", sect)
-    networks[sect] = DyndnsNetwork(config[sect])
-# Remove stale items from persistent database, which are no more
-# mentioned in the config file
-for i in set([x.decode("utf-8")
-              for x in database.keys()]) - set(networks.keys()):
-    logging.info("Removing from persistent state network %s" +
-                 "which is no more in config", i)
-    del database[i]
-
 while True:
+    load_config()
     check_for_update()
     time.sleep(interval)
