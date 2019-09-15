@@ -34,23 +34,40 @@ FILENAME = "/var/lib/misc/dyndns.hosts"
 # user
 HUP_SCRIPT = "/usr/local/sbin/hup_daemon /var/run/dnsmasq/dnsmasq.pid"
 # ========= END CONFIGURATION ==========================
-# Get info from CGI environment
-form = cgi.FieldStorage()
-hostnames = form.getlist("hostname")
-address = form.getlist("myip")
-if not address or address[0] == "auto":
-    address = os.environ['REMOTE_ADDR']
-else:
-    address = address[0]
-if not hostnames:
-    print("Status: 404 NOT FOUND")
-    print("Content-Type: text/plain\n")
-    print("No hostname parameter in the URL")
-    sys.exit(0)
-hostname = hostnames[0]
 
-try:
-    f = open(FILENAME, "r+")
+def htresult(code, msg):
+    """
+    Returns HTTP status code with plain-text message to HTTP client
+    """
+    status = {200:'200 OK', 401:'401 UNAUTHORIZED', 404:'404 NOT FOUND',
+              403:'403 FORBIDDEN', 500:'500 SERVER ERROR'}
+    if code in status:
+        print(status[code])
+    else:
+        print(code)
+    print("Content-Type: text/plain\n")
+    print(msg)
+    sys.exit(0)
+
+def main():
+    """
+    Does the main job
+    Returns tuple of status code and message
+    """
+    # Get info from CGI environment
+    form = cgi.FieldStorage()
+    hostnames = form.getlist("hostname")
+    address = form.getlist("myip")
+    if not address or address[0] == "auto":
+        address = os.environ['REMOTE_ADDR']
+    else:
+        address = address[0]
+    if not hostnames:
+        return (404, "No hostname parameter in the URL")
+
+    hostname = hostnames[0]
+
+    f = open(FILENAME, "r+") # pylint:disable=invalid-name
     out = ""
     hostnames = hostname.split(".")
     # add unqualified name to the host line
@@ -83,10 +100,10 @@ try:
     f.close()
     os.system(HUP_SCRIPT)
     # Return success status to http client
-    print("Status: 200 OK")
-    print("Content-Type: text/plain\n")
-    print("OK\n")
-except Exception as e:
-    print("Status: 500 SERVER ERROR")
-    print("Content-Type: text/plain\n")
-    traceback.print_exc(file=sys.stdout)
+    return (200, "OK")
+
+
+try:
+    htresult(*main())
+except Exception as exc: # pylint: disable=broad-except
+    htresult(500, str(exc)+"\n"+traceback.format_exc())
