@@ -34,9 +34,9 @@ DOMAINS = {
 }
 #================= END CONFIGURATION ==========================
 
-def hterror(code, msg, exc=False):
+def hterror(code, msg):
     """ Returns HTTP status code with plain-text message
-     and optionally traceback info to HTTP client
+     and  to HTTP client
     """
     status = {200:'200 OK', 401:'401 UNAUTHORIZED', 404:'404 NOT FOUND',
               403:'403 FORBIDDEN', 500:'500 SERVER ERROR'}
@@ -46,45 +46,45 @@ def hterror(code, msg, exc=False):
         print(code)
     print("Content-Type: text/plain\n")
     print(msg)
-    if exc:
-        traceback.print_exc(file=sys.stdout)
     sys.exit(0)
-
-form = cgi.FieldStorage()
-hostnames = form.getlist("hostname")
-address = form.getlist("myip")
-if not address or address[0] == "auto":
-    address = os.environ['REMOTE_ADDR']
-else:
-    address = address[0]
-if not 'REMOTE_USER' in os.environ:
-    hterror(401, "No user name")
-user = os.environ['REMOTE_USER']
-if not hostnames:
-    hterror(404, "No hostname parameter in the URL")
-try:
+def main():
+    """
+    Does all job
+    """
+    form = cgi.FieldStorage()
+    hostnames = form.getlist("hostname")
+    address = form.getlist("myip")
+    if not address or address[0] == "auto":
+        address = os.environ['REMOTE_ADDR']
+    else:
+        address = address[0]
+    if not 'REMOTE_USER' in os.environ:
+        return (401, "No user name")
+    user = os.environ['REMOTE_USER']
+    if not hostnames:
+        return (404, "No hostname parameter in the URL")
     hostname = hostnames[0]
     if hostname in DOMAINS:
         domain = hostname
     else:
         domain = ".".join(hostname.split(".")[1:])
-        if not domain in DOMAINS:
+        if domain not in DOMAINS:
             hterror(404, "Domain %s not supported." % domain)
     dominfo = DOMAINS[domain]
     if not user in dominfo['users']:
-        hterror(403, 'User %s is not allowed to update domain %s' %
+        return (403, 'User %s is not allowed to update domain %s' %
                 (user, domain))
     try:
-        a = ipaddress.ip_address(address)
-    except Exception as e:
-        hterror(400, "Invalid IP address format")
-    if a.version == 6:
+        addr = ipaddress.ip_address(address)
+    except Exception: # pylint: disable=broad-except
+        return (400, "Invalid IP address format")
+    if addr.version == 6:
         recordtype = 'AAAA'
     else:
         recordtype = 'A'
     key = os.path.join(KEYDIR, dominfo['key'])
     if not os.access(key, os.R_OK):
-        hterror(500, "key file for domain %s missing" % domain)
+        return (500, "key file for domain %s missing" % domain)
     nsupdate_script = """server %(server)s
 zone %(domain)s
 update delete %(hostname)s. %(recordtype)s
@@ -95,6 +95,10 @@ send
        'recordtype':recordtype, 'ttl':TTL, 'address':address}
     subprocess.run([NSUPDATE, '-k', key], stdout=sys.stderr, check=True,
                    stdin=nsupdate_script)
-    hterror(200, "OK")
-except Exception as e:
-    hterror(500, str(e), exc=True)
+    return (200, "OK")
+
+
+try:
+    hterror(*main())
+except Exception as e: # pylint: disable=broad-except,invalid-name
+    hterror(500, str(e)+"\n"+traceback.format_exc())
