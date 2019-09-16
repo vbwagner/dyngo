@@ -1,0 +1,38 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:        dyngo
+# Required-Start:  $network $remote_fs $syslog
+# Required-Stop:   $network $remote_fs $syslog
+# Default-Start:   2 3 4 5
+# Default-Stop: 
+# Short-Description: Start multiserver dyndns client
+### END INIT INFO
+PIDFILE=/run/dyngo.pid
+USER=dyngo
+LOG=/var/log/dyngo.log
+PROGRAM=/usr/local/sbin/dyngo
+
+case "$1" in
+start)
+	touch $PIDFILE $LOG
+	chown $USER $PIDFILE $LOG
+	su $USER -m -c "(${PROGRAM} </dev/null > $LOG 2>&1 & )&"
+	;;
+stop)  	pgrep -u dyngo
+	;;
+
+status) if pgrep -u dyngo >/dev/null; then
+		echo "$PROGRAM is running"
+	else
+		echo "$PROGRAM is dead"
+	fi
+	tail $LOG
+	;;
+restart|force-reload)
+	$0 stop
+	$0 start
+	;;
+*) echo "Usage: $0 [stop|start|status|restart|force-reload]"
+	;;
+esac
+	
