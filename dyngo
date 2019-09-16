@@ -92,8 +92,8 @@ class DyndnsNetwork:
         """
         addrs = [a for a in addrlist if self.contains(a)]
         if not addrs:
-            logging.info("Address for net %s no more found", self.name)
             if self.name in database:
+                logging.info("Address for net %s no more found", self.name)
                 del database[self.name]
                 return True
             return False
@@ -161,7 +161,7 @@ def read_config():
     if timestamp <= loaded:
         # Return if config is not changed since last read
         return False
-    if config.read(name) != 1:
+    if config.read(name) != [name]:
         logging.error("Error reading configuration from %s", name)
         config["dyngo"]["name"] = name
         config["dyngo"]["loaded"] = str(timestamp)
@@ -288,7 +288,7 @@ db_file.add_section("current")
 # setting global defaults for configuration
 interval = 60 # pylint: disable=invalid-name
 config['dyngo'] = {'interval':str(interval), 'database':'/var/lib/dyngo/dyngo.db',
-                   'ca':'/etc/ssl/certs', 'loglevel':'WARNING',
+                   'ca':'/etc/ssl/certs', 'loglevel':'INFO',
                    'loaded':'0', 'name':'/etc/dyngo.conf'}
 
 # Add an extra log level between INFO and WARNING
