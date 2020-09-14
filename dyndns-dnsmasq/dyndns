@@ -4,7 +4,7 @@ Example dyndns script which uses dnsmask caching newsserver.
 It intended to run as cgi, but it is no problem to rewrite it to use
 wsgi or some python-based webserver.
 
-It handles get request only and extracts just to fields - hostname and
+It handles get request only and extracts just two fields - hostname and
 myip.
 
 FILENAME should me name of the file which is included into dnsmasq
@@ -42,7 +42,7 @@ def htresult(code, msg):
     status = {200:'200 OK', 401:'401 UNAUTHORIZED', 404:'404 NOT FOUND',
               403:'403 FORBIDDEN', 500:'500 SERVER ERROR'}
     if code in status:
-        print(status[code])
+        print("Status: " + status[code])
     else:
         print(code)
     print("Content-Type: text/plain\n")
