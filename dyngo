@@ -105,6 +105,7 @@ class DyndnsNetwork:
         # If we got here than either address is not same as in database
         # of there are no address for our network in database.
         # In both cases we have to perform nsupdate
+        # pylint: disable=broad-except
         try:
             logging.info("Doing update for net %s with address %s",
                          self.name, str(addr))
@@ -112,8 +113,9 @@ class DyndnsNetwork:
             database[self.name] = str(addr)
             return True
         except urllib.error.HTTPError as ex:
-            logging.exception("Http error doing nsupdate code %s",
-                              ex.code)
+            logging.exception("Http error doing nsupdate for net %s code %s", self.name, ex.code)
+        except Exception as ex:
+            logging.exception("Error updating network %s :%r", self.name, ex)
         return False
 def get_current_addresses():
     """
