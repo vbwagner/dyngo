@@ -21,9 +21,9 @@ appropriate dynamic DNS server if so.
 
 It is primarily intended to let machine be visible in the local DNS 
 of office or home local networks, VPNs and so on. So it expects that
-there could be private dynamic dns servers. Couple of dynamic DNS
+there could be private dynamic DNS servers. Couple of dynamic DNS
 scripts is included into distribution to make it easier to set up
-dynamic dns.
+dynamic DNS.
 
 But nothing prevent user from defining some of networks as global
 ones and put URL of public dyndns server into it.

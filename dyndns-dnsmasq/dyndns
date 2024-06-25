@@ -22,10 +22,10 @@ web-server level. Although, there is now no way to specify which user
 have right to change which DNS records.
 
 """
-import cgi
 import sys
 import traceback
 import os
+import urllib.parse
 
 # ========= CONFIGURATION ==========================
 # filename which is writable to CGI and passed to dnsmasq as addn-hosts
@@ -55,9 +55,11 @@ def main():
     Returns tuple of status code and message
     """
     # Get info from CGI environment
-    form = cgi.FieldStorage()
-    hostnames = form.getlist("hostname")
-    address = form.getlist("myip")
+    form = urllib.parse.parse_qs(os.environ['QUERY_STRING'])
+    hostnames = form["hostname"]
+    address = form.get("myip",None)
+    if not address:
+        address = form.get("myipv6",None)
     if not address or address[0] == "auto":
         address = os.environ['REMOTE_ADDR']
     else:
@@ -66,8 +68,6 @@ def main():
         return (404, "No hostname parameter in the URL")
 
     hostname = hostnames[0]
-
-    f = open(FILENAME, "r+") # pylint:disable=invalid-name
     out = ""
     hostnames = hostname.split(".")
     # add unqualified name to the host line
@@ -75,29 +75,30 @@ def main():
         hostnames = [hostname, hostnames[0]]
     else:
         hostnames = [hostname]
-    # Read hosts file and preserve everything
-    # which is not related to our name and IP address
-    for line in f.read().split("\n"):
-        # skip empty lines
-        if line == "":
-            continue
-        # Never skip comments
-        if not line.startswith("#"):
-            fields = line.split()
-            # skip line with our IP - it is our now
-            if fields[0] == address:
-                continue
-            # skip line with our name
-            if hostname in fields[1:]:
-                continue
-        # add all other lines to new file content
-        out += line + "\n"
 
-    # add our address and names
-    out += address +"\t" + " ".join(hostnames) + "\n"
-    f.seek(0, 0)
-    f.write(out)
-    f.close()
+    with open(FILENAME, "r+", encoding="utf-8") as f: # pylint:disable=invalid-name
+        # Read hosts file and preserve everything
+        # which is not related to our name and IP address
+        for line in f.read().split("\n"):
+            # skip empty lines
+            if line == "":
+                continue
+            # Never skip comments
+            if not line.startswith("#"):
+                fields = line.split()
+                # skip line with our IP - it is our now
+                if fields[0] == address:
+                    continue
+                # skip line with our name
+                if hostname in fields[1:]:
+                    continue
+            # add all other lines to new file content
+            out += line + "\n"
+
+        # add our address and names
+        out += address +"\t" + " ".join(hostnames) + "\n"
+        f.seek(0, 0)
+        f.write(out)
     os.system(HUP_SCRIPT)
     # Return success status to http client
     return (200, "OK")

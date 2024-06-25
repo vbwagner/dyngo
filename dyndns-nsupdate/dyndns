@@ -16,12 +16,12 @@ DOMAINS = dictionary of domains which can be handled here
 TTL = time to live of A records in seconds
 """
 
-import cgi
 import sys
 import traceback
 import os
 import subprocess
 import ipaddress
+import urllib.parse
 #================== CONFIGURATION ============================
 NSUPDATE = "/usr/bin/nsupdate"
 KEYDIR = "/etc/bind/keys"
@@ -51,9 +51,11 @@ def main():
     """
     Does all job
     """
-    form = cgi.FieldStorage()
-    hostnames = form.getlist("hostname")
-    address = form.getlist("myip")
+    form = urllib.parse.parse_qs(os.environ['QUERY_STRING'])
+    hostnames = form.get("hostname",None)
+    address = form.get("myip",None)
+    if not address:
+        address = form.get("myipv6",None)
     if not address or address[0] == "auto":
         address = os.environ['REMOTE_ADDR']
     else:
@@ -69,7 +71,7 @@ def main():
     else:
         domain = ".".join(hostname.split(".")[1:])
         if domain not in DOMAINS:
-            hterror(404, "Domain %s not supported." % domain)
+            hterror(404, "Domain %s not supported." +  domain)
     dominfo = DOMAINS[domain]
     if not user in dominfo['users']:
         return (403, 'User %s is not allowed to update domain %s' %

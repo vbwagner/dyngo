@@ -73,9 +73,12 @@ class DyndnsNetwork:
         """
         # Construct opener
         logging.debug("Going to send message to %s", self.server)
+        ip_param = "myip"
+        if address.version == 6:
+            ip_param = "myipv6"
         url = '%s?%s' % (self.server,
                          urllib.parse.urlencode({'hostname': self.hostname,
-                                                 'myip': str(address)}
+                                                 ip_param: str(address)}
                                                ))
         with self.urlopen(url) as resp:
             logging.debug("Server replied: %s", resp.read().decode("utf-8"))
